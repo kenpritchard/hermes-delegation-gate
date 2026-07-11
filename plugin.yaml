@@ -1,0 +1,6 @@
+name: delegation-gate
+version: 1.1.0
+description: "Require human approval before delegate_task spawns subagents. Surfaces goal and task count so you know what you're paying for."
+author: "kenpritchard"
+hooks:
+  - pre_tool_call
