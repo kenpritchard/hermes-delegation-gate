@@ -21,6 +21,8 @@ Subagent delegation is powerful but easy for the model to overuse. In the incide
 
 Disabling the delegation toolset entirely throws away the upside. This plugin keeps delegation available but puts a human decision in front of every use — the agent proposes, you approve.
 
+Hermes configuration allows for assigning less expensive models to subagents or limiting their number, but nothing allowed for the default configuration to be enabled with a guard that would allow for human approval before execution so this plugin was developed.
+
 ## What it does
 
 When the model calls `delegate_task`, the call is intercepted **before execution** and escalated to the same `[o]nce / [s]ession / [a]lways / [d]eny` human-approval gate Hermes uses for dangerous shell commands. The model cannot skip or bypass it.
@@ -45,11 +47,33 @@ Approval semantics:
 hermes plugins install kenpritchard/hermes-delegation-gate --enable
 ```
 
-Or manually: copy `plugin.yaml` and `__init__.py` into `~/.hermes/plugins/delegation-gate/` (or `<profile>/plugins/delegation-gate/` for a single profile) and run `hermes plugins enable delegation-gate`.
-
 No tool override grant is needed — the plugin registers a hook, not a tool replacement.
 
-Plugins are per-profile: each profile has its own `plugins/` directory and `plugins.enabled` allow-list, so you can gate one profile and leave others untouched.
+### Installing for a specific profile
+
+Plugins are per-profile: each profile has its own `plugins/` directory and its own `plugins.enabled` allow-list in `config.yaml`, so you can gate one profile and leave others untouched.
+
+`hermes plugins install` has no profile flag of its own — use the **global** `-p` flag, which repoints the Hermes home (and therefore the plugins directory) at that profile:
+
+```bash
+hermes -p myprofile plugins install kenpritchard/hermes-delegation-gate --enable
+hermes -p myprofile plugins list      # verify: delegation-gate enabled
+```
+
+Or manually: copy `plugin.yaml` and `__init__.py` into the profile's plugins directory —
+
+```
+<hermes home>/profiles/<name>/plugins/delegation-gate/   # named profile
+~/.hermes/plugins/delegation-gate/                       # default profile
+```
+
+— then `hermes -p <name> plugins enable delegation-gate`. (Git install is preferred: it lets `hermes plugins update delegation-gate` pull future versions, which a hand-copied directory can't.)
+
+Note the delegation **toolset** is a separate per-profile switch from the plugin: the plugin gates `delegate_task` only where the tool is enabled at all (`hermes tools enable delegation -p <name>`). A sensible fleet setup is: toolset off on unattended/cron profiles, toolset on + this gate everywhere else.
+
+### Verify it gates
+
+Start an interactive session and ask the agent to delegate something trivial — you should get the `once/session/always/deny` prompt with a goal preview before any subagent starts. If delegation runs without a prompt, re-check the runtime requirement at the top of this README.
 
 ## Companion cost controls
 
