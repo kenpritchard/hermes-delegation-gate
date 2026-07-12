@@ -100,6 +100,10 @@ Block mode differs from approve mode in two ways that matter:
 
 Ways to set it, from least to most persistent:
 
+#### macOS / Linux
+
+The `VAR=value command` syntax (env var prefix before the command) sets the variable for that single process only — it doesn't pollute the shell afterward.
+
 ```bash
 # one run only (shell env prefix — before the command, not after)
 DELEGATION_GATE_MODE=block hermes -p batch-profile
@@ -113,6 +117,28 @@ DELEGATION_GATE_MODE=block hermes -p batch-profile --yolo
 echo 'DELEGATION_GATE_MODE=block' >> <hermes home>/profiles/batch-profile/.env
 
 # machine-wide: export from your shell profile (rarely what you want)
+```
+
+#### Windows
+
+The `VAR=value command` syntax does **not** work in cmd.exe or PowerShell — Windows shells don't support prepending an env var assignment to a command. The closest one-liners set the variable in the current shell, which means it lingers for that session (not truly one-run-only):
+
+**PowerShell** (sets it for the current shell session; it persists after the command finishes):
+
+```powershell
+$env:DELEGATION_GATE_MODE='block'; hermes -p batch-profile
+```
+
+**cmd.exe** (same caveat — `set` persists for the shell session):
+
+```cmd
+set DELEGATION_GATE_MODE=block && hermes -p batch-profile
+```
+
+If you need a true one-run-only setting on Windows, use the `.env` route instead — it scopes the variable to the profile without polluting any shell session:
+
+```powershell
+Add-Content <hermes home>\profiles\batch-profile\.env 'DELEGATION_GATE_MODE=block'
 ```
 
 The mode is read **once at plugin load** (mirroring how Hermes freezes yolo mode at import): it's a policy set by whoever launched the process, not something a session can flip. Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
