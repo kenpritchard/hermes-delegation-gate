@@ -4,9 +4,9 @@ A tiny [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that 
 
 ## ⚠️ Runtime requirement (read this first)
 
-This plugin uses the `pre_tool_call` → `action: "approve"` directive, which Hermes only honors on builds **newer than commit `36308f066`** (`feat(plugins): pass approve rule keys to approval gate`, ~2026-07-07).
+The default **approve mode** uses the `pre_tool_call` → `action: "approve"` directive, which Hermes only honors on builds **newer than commit `36308f066`** (`feat(plugins): pass approve rule keys to approval gate`, ~2026-07-07).
 
-**On older builds (e.g. v0.18.0), the plugin loads without error but silently does not gate anything.** Verify your runtime before relying on it:
+**On older builds (e.g. v0.18.0), approve mode loads without error but silently does not gate anything.** Verify your runtime before relying on it:
 
 ```bash
 python3 -c "import hermes_cli.plugins as p; print(hasattr(p, 'resolve_pre_tool_block'))"
@@ -14,6 +14,8 @@ python3 -c "import hermes_cli.plugins as p; print(hasattr(p, 'resolve_pre_tool_b
 ```
 
 (Run with the Python interpreter of your Hermes install.)
+
+If it prints `False`, you can't use approve mode — but **[block mode](#block-mode-delegation_gate_mode)** (`DELEGATION_GATE_MODE=block`) still works: the `block` directive predates the approve action, so on older runtimes the plugin can refuse delegation outright even though it can't prompt.
 
 ## Why
 
@@ -41,13 +43,19 @@ Approval semantics:
 
 **Fail-closed:** in non-interactive contexts (cron jobs, scripts) with no human present, gated calls are **blocked**, not silently allowed. Set `approvals.cron_mode: approve` if you truly want unattended delegation — better to keep the delegation toolset off on cron profiles entirely.
 
+**YOLO mode bypasses this gate.** Like every approval prompt in Hermes, running with `--yolo` (or the session `/yolo` toggle) skips the gate entirely and delegation proceeds unprompted. That's by design — yolo means "I trust the agent with everything" — but if uncontrolled delegation spend is the very thing you're guarding against, don't run gated profiles in yolo mode.
+
 ## Install
 
 ```bash
 hermes plugins install kenpritchard/hermes-delegation-gate --enable
 ```
 
-No tool override grant is needed — the plugin registers a hook, not a tool replacement.
+When enabling, Hermes asks *"Allow this plugin to replace built-in tools (e.g. shell_exec, write_file)?"* — it asks this for every plugin. **Answer No**: delegation-gate registers a hook, not a tool replacement, and works fully without the grant. To skip the prompt (e.g. in scripts):
+
+```bash
+hermes plugins enable delegation-gate --no-allow-tool-override
+```
 
 ### Installing for a specific profile
 
@@ -67,13 +75,49 @@ Or manually: copy `plugin.yaml` and `__init__.py` into the profile's plugins dir
 ~/.hermes/plugins/delegation-gate/                       # default profile
 ```
 
-— then `hermes -p <name> plugins enable delegation-gate`. (Git install is preferred: it lets `hermes plugins update delegation-gate` pull future versions, which a hand-copied directory can't.)
+— then `hermes -p <name> plugins enable delegation-gate --no-allow-tool-override`. (Git install is preferred: it lets `hermes plugins update delegation-gate` pull future versions, which a hand-copied directory can't.)
 
 Note the delegation **toolset** is a separate per-profile switch from the plugin: the plugin gates `delegate_task` only where the tool is enabled at all (`hermes tools enable delegation -p <name>`). A sensible fleet setup is: toolset off on unattended/cron profiles, toolset on + this gate everywhere else.
 
 ### Verify it gates
 
-Start an interactive session and ask the agent to delegate something trivial — you should get the `once/session/always/deny` prompt with a goal preview before any subagent starts. If delegation runs without a prompt, re-check the runtime requirement at the top of this README.
+Start an interactive session and give the agent a prompt that forces a delegation:
+
+```
+Use delegate_task to list the contents of this directory and return the count. Do not do it yourself.
+```
+
+You should get the `once/session/always/deny` prompt with a goal preview before any subagent starts (or, in block mode, an immediate refusal). If delegation runs without a prompt, re-check the runtime requirement at the top of this README.
+
+## Block mode (`DELEGATION_GATE_MODE`)
+
+By default the gate *asks* (`approve` mode). Set `DELEGATION_GATE_MODE=block` to *refuse* delegation outright: the model gets a policy message as the tool result ("delegation is disabled by policy... complete the task yourself") and adapts, with no prompt and no waiting.
+
+Block mode differs from approve mode in two ways that matter:
+
+- **It holds under yolo mode.** `--yolo` / `/yolo` bypasses approval prompts (including this plugin's approve mode), but a `block` directive never reaches the approval machinery — there is nothing to bypass.
+- **It works on older runtimes.** Hermes builds that predate the `approve` action (see the runtime requirement above) still honor `block`, so block mode functions even where approve mode silently doesn't.
+
+Ways to set it, from least to most persistent:
+
+```bash
+# one run only (shell env prefix — before the command, not after)
+DELEGATION_GATE_MODE=block hermes -p batch-profile
+
+# yolo run with delegation still locked down: yolo skips every approval
+# prompt, but block never reaches the approval machinery, so the agent
+# runs unattended EXCEPT it cannot delegate
+DELEGATION_GATE_MODE=block hermes -p batch-profile --yolo
+
+# per profile, persistent: add to the profile's .env file
+echo 'DELEGATION_GATE_MODE=block' >> <hermes home>/profiles/batch-profile/.env
+
+# machine-wide: export from your shell profile (rarely what you want)
+```
+
+The mode is read **once at plugin load** (mirroring how Hermes freezes yolo mode at import): it's a policy set by whoever launched the process, not something a session can flip. Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
+
+Suggested fleet pattern: approve mode (default) on interactive profiles, `block` in the `.env` of cron/unattended/yolo profiles.
 
 ## Companion cost controls
 

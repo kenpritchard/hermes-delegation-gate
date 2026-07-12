@@ -4,13 +4,41 @@ Returning {"action": "approve", ...} from pre_tool_call escalates the call to
 the same [o]nce/[s]ession/[a]lways/[d]eny gate that dangerous shell commands
 use (see tools/approval.py:request_tool_approval). Cron and other
 non-interactive contexts fail closed unless approvals.cron_mode allows it.
+
+Set DELEGATION_GATE_MODE=block to refuse delegation outright instead of
+prompting: no approval gate, so it also holds under yolo mode and on older
+Hermes runtimes that ignore the "approve" action. Unset or "approve" = prompt.
 """
 from __future__ import annotations
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 GATED_TOOLS = {"delegate_task"}
+
+# Policy is frozen at import time, mirroring Hermes' own yolo handling:
+# the mode is set by whoever launched the process (shell prefix or the
+# profile's .env), not something mutable from inside a session.
+_VALID_MODES = ("approve", "block")
+_raw_mode = os.getenv("DELEGATION_GATE_MODE", "").strip().lower() or "approve"
+if _raw_mode in _VALID_MODES:
+    MODE = _raw_mode
+else:
+    # Unrecognized value: fall back to "block", not "approve" — a
+    # misconfigured unattended profile must not run with an open gate.
+    logger.warning(
+        "[delegation-gate] unrecognized DELEGATION_GATE_MODE=%r; "
+        "falling back to 'block' (valid values: %s)",
+        _raw_mode, ", ".join(_VALID_MODES),
+    )
+    MODE = "block"
+
+BLOCK_MESSAGE = (
+    "Delegation is disabled by policy on this profile "
+    "(DELEGATION_GATE_MODE=block). Do not retry delegate_task. "
+    "Complete the task yourself without spawning subagents."
+)
 
 # One stable rule key: answering [a]lways opens delegation permanently for
 # this profile, regardless of goal text. Deliberate — the per-reason default
@@ -53,6 +81,8 @@ def _pre_tool_call(tool_name: str = "", args: dict | None = None, **kwargs):
     logger.debug("[delegation-gate] pre_tool_call: %s, args=%s", tool_name, args)
     if tool_name not in GATED_TOOLS:
         return None
+    if MODE == "block":
+        return {"action": "block", "message": BLOCK_MESSAGE}
     summary = _summarize(args if isinstance(args, dict) else {})
     logger.debug("[delegation-gate] summary=%s", summary)
     return {
