@@ -4,3 +4,5 @@ description: "Require human approval before delegate_task spawns subagents. Surf
 author: "kenpritchard"
 hooks:
   - pre_tool_call
+provides_hooks:
+  - pre_tool_call
