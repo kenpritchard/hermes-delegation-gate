@@ -15,6 +15,8 @@ python3 -c "import hermes_cli.plugins as p; print(hasattr(p, 'resolve_pre_tool_b
 
 (Run with the Python interpreter of your Hermes install.)
 
+The manifest declares `requires_hermes: ">=0.18.2"`, so current Hermes refuses to load it on a build that is too old instead of loading it as a no-op. Tested on **Hermes v0.23.0**.
+
 If it prints `False`, you can't use approve mode — but **[block mode](#block-mode-delegation_gate_mode)** (`DELEGATION_GATE_MODE=block`) still works: the `block` directive predates the approve action, so on older runtimes the plugin can refuse delegation outright even though it can't prompt.
 
 ## Why
@@ -34,6 +36,8 @@ The approval prompt shows what you'd be paying for:
 - single task: the subagent's goal
 - batch fan-out: the task count and a preview of each goal (first 5, then `+N more`) — important, since one `delegate_task` call can spawn several children
 
+**Controlling running subagents is never gated.** `delegate_task` also has live-control actions (`action: list / steer / stop`, Hermes v0.21+) for children that are already running. Those can't spawn anything, so they pass straight through in both modes. Stopping a runaway subagent never needs your approval.
+
 Approval semantics:
 
 - **once** — this call only; next call prompts again
@@ -42,6 +46,8 @@ Approval semantics:
 - **deny** — the call is blocked; the model sees the denial as the tool result
 
 **Fail-closed:** in non-interactive contexts (cron jobs, scripts) with no human present, gated calls are **blocked**, not silently allowed. Set `approvals.cron_mode: approve` if you truly want unattended delegation — better to keep the delegation toolset off on cron profiles entirely.
+
+**`approvals.mode: smart` does not auto-approve it.** Smart mode's guardian model only judges flagged shell commands; a plugin-requested approval always goes to a human.
 
 **YOLO mode bypasses this gate.** Like every approval prompt in Hermes, running with `--yolo` (or the session `/yolo` toggle) skips the gate entirely and delegation proceeds unprompted. That's by design — yolo means "I trust the agent with everything" — but if uncontrolled delegation spend is the very thing you're guarding against, don't run gated profiles in yolo mode.
 
@@ -170,6 +176,19 @@ Prompt-level guidance helps too — a line in `SOUL.md`/`AGENTS.md` that delegat
 ```
 
 Approval outcomes reuse Hermes' existing session/permanent allowlist machinery; a gate error fails closed to a block.
+
+## Development
+
+```bash
+python -m pytest tests/        # no Hermes install needed
+hermes plugins validate .
+```
+
+## Changelog
+
+- **1.3.0** (2026-11-08): `list` / `steer` / `stop` control actions pass through ungated; manifest uses `provides_hooks` (fixes `hermes plugins validate` on current Hermes) and declares `requires_hermes: ">=0.18.2"`; unit tests.
+- **1.2.0** (2026-07-12): block mode (`DELEGATION_GATE_MODE=block`).
+- **1.1.0** (2026-07-11): first public release.
 
 ## License
 

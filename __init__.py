@@ -5,6 +5,10 @@ the same [o]nce/[s]ession/[a]lways/[d]eny gate that dangerous shell commands
 use (see tools/approval.py:request_tool_approval). Cron and other
 non-interactive contexts fail closed unless approvals.cron_mode allows it.
 
+Live-control calls (action list/steer/stop on running children) are never
+gated: they cannot spawn anything, and stopping a child should never need
+permission.
+
 Set DELEGATION_GATE_MODE=block to refuse delegation outright instead of
 prompting: no approval gate, so it also holds under yolo mode and on older
 Hermes runtimes that ignore the "approve" action. Unset or "approve" = prompt.
@@ -16,6 +20,13 @@ import os
 logger = logging.getLogger(__name__)
 
 GATED_TOOLS = {"delegate_task"}
+
+# delegate_task's live-control actions (Hermes v0.21+) act on children that are
+# already running: list them, steer them, stop them. They never spawn anything
+# (Hermes ignores goal/tasks for them), so they pass through ungated in both
+# modes -- prompting before "stop" would make a cost-control plugin get in the
+# way of cutting cost. Normalized exactly like tools/delegate_tool.py does.
+CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
 
 # Policy is frozen at import time, mirroring Hermes' own yolo handling:
 # the mode is set by whoever launched the process (shell prefix or the
@@ -77,13 +88,21 @@ def _summarize(args: dict) -> str:
     return f"1 subagent, goal: {goal or '(no goal given)'}"
 
 
+def _is_control_action(args: dict) -> bool:
+    action = args.get("action")
+    return isinstance(action, str) and action.strip().lower() in CONTROL_ACTIONS
+
+
 def _pre_tool_call(tool_name: str = "", args: dict | None = None, **kwargs):
     logger.debug("[delegation-gate] pre_tool_call: %s, args=%s", tool_name, args)
     if tool_name not in GATED_TOOLS:
         return None
+    args = args if isinstance(args, dict) else {}
+    if _is_control_action(args):
+        return None
     if MODE == "block":
         return {"action": "block", "message": BLOCK_MESSAGE}
-    summary = _summarize(args if isinstance(args, dict) else {})
+    summary = _summarize(args)
     logger.debug("[delegation-gate] summary=%s", summary)
     return {
         "action": "approve",
