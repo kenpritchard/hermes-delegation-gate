@@ -28,22 +28,39 @@ GATED_TOOLS = {"delegate_task"}
 # way of cutting cost. Normalized exactly like tools/delegate_tool.py does.
 CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
 
-# Policy is frozen at import time, mirroring Hermes' own yolo handling:
-# the mode is set by whoever launched the process (shell prefix or the
-# profile's .env), not something mutable from inside a session.
+# Policy is read once per process and then frozen, mirroring Hermes' own yolo
+# handling: the mode is set by whoever launched the process (shell prefix or
+# the profile's .env), not something mutable from inside a session.
+#
+# It is read on the first gated call, not at import: Hermes discovers and
+# imports plugins *before* it loads the profile's .env (seen on v0.23.0), so a
+# value read at import would never see DELEGATION_GATE_MODE set in .env. By the
+# time the agent can call delegate_task, .env has been loaded.
 _VALID_MODES = ("approve", "block")
-_raw_mode = os.getenv("DELEGATION_GATE_MODE", "").strip().lower() or "approve"
-if _raw_mode in _VALID_MODES:
-    MODE = _raw_mode
-else:
+_MODE: str | None = None
+
+
+def _resolve_mode() -> str:
+    raw = os.getenv("DELEGATION_GATE_MODE", "").strip().lower() or "approve"
+    if raw in _VALID_MODES:
+        return raw
     # Unrecognized value: fall back to "block", not "approve" — a
     # misconfigured unattended profile must not run with an open gate.
     logger.warning(
         "[delegation-gate] unrecognized DELEGATION_GATE_MODE=%r; "
         "falling back to 'block' (valid values: %s)",
-        _raw_mode, ", ".join(_VALID_MODES),
+        raw, ", ".join(_VALID_MODES),
     )
-    MODE = "block"
+    return "block"
+
+
+def _mode() -> str:
+    """The process's gate mode: read on first use, then fixed for its lifetime."""
+    global _MODE
+    if _MODE is None:
+        _MODE = _resolve_mode()
+        logger.info("[delegation-gate] mode=%s", _MODE)
+    return _MODE
 
 BLOCK_MESSAGE = (
     "Delegation is disabled by policy on this profile "
@@ -100,7 +117,7 @@ def _pre_tool_call(tool_name: str = "", args: dict | None = None, **kwargs):
     args = args if isinstance(args, dict) else {}
     if _is_control_action(args):
         return None
-    if MODE == "block":
+    if _mode() == "block":
         return {"action": "block", "message": BLOCK_MESSAGE}
     summary = _summarize(args)
     logger.debug("[delegation-gate] summary=%s", summary)

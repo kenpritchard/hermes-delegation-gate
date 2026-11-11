@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load(monkeypatch, mode=None):
-    """Import a fresh copy: MODE is frozen at import, like the real plugin load."""
+    """Import a fresh copy, like the real plugin load. The mode is read on the first gated call."""
     if mode is None:
         monkeypatch.delenv("DELEGATION_GATE_MODE", raising=False)
     else:
@@ -78,12 +78,38 @@ def test_block_mode_blocks_spawns_but_not_control(monkeypatch):
 
 
 def test_unknown_mode_fails_safe_to_block(monkeypatch):
-    assert load(monkeypatch, "yes-please").MODE == "block"
+    assert load(monkeypatch, "yes-please")._mode() == "block"
 
 
 @pytest.mark.parametrize("raw", ["approve", "APPROVE", "  "])
 def test_approve_mode_spellings(monkeypatch, raw):
-    assert load(monkeypatch, raw).MODE == "approve"
+    assert load(monkeypatch, raw)._mode() == "approve"
+
+
+def test_mode_set_after_import_is_honored(monkeypatch):
+    # Hermes v0.23 imports plugins before it loads the profile's .env, so the
+    # variable appears only after import. The first gated call must see it.
+    g = load(monkeypatch)                      # imported with the variable unset
+    monkeypatch.setenv("DELEGATION_GATE_MODE", "block")   # then .env is loaded
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+
+
+def test_mode_is_fixed_after_first_gated_call(monkeypatch):
+    # Read once, then frozen: changing the variable mid-session does nothing.
+    g = load(monkeypatch, "block")
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+    monkeypatch.setenv("DELEGATION_GATE_MODE", "approve")
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+
+
+def test_other_tools_and_control_actions_do_not_fix_the_mode(monkeypatch):
+    # Only a gated spawn reads the mode, so early non-gated calls can't
+    # freeze it before .env is loaded.
+    g = load(monkeypatch)
+    g._pre_tool_call("terminal", {"command": "ls"})
+    g._pre_tool_call("delegate_task", {"action": "list"})
+    monkeypatch.setenv("DELEGATION_GATE_MODE", "block")
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
 
 
 def test_register_declares_only_pre_tool_call(gate):

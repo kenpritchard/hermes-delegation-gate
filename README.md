@@ -147,7 +147,7 @@ If you need a true one-run-only setting on Windows, use the `.env` route instead
 Add-Content <hermes home>\profiles\batch-profile\.env 'DELEGATION_GATE_MODE=block'
 ```
 
-The mode is read **once at plugin load** (mirroring how Hermes freezes yolo mode at import): it's a policy set by whoever launched the process, not something a session can flip. Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
+The mode is read **once per process, on the first delegation attempt**, and then fixed (mirroring how Hermes freezes yolo mode): it's a policy set by whoever launched the process, not something a session can flip. It isn't read at plugin load because Hermes imports plugins before it loads the profile's `.env`, so a value set there would be missed. Changing it takes a gateway restart (and, on a Docker/Desktop backend, a dashboard restart too). Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
 
 Suggested fleet pattern: approve mode (default) on interactive profiles, `block` in the `.env` of cron/unattended/yolo profiles.
 
@@ -186,6 +186,7 @@ hermes plugins validate .
 
 ## Changelog
 
+- **1.3.1** (2026-11-11): fix block mode set in the profile's `.env`. The mode was read at import, but Hermes (v0.23) imports plugins before loading `.env`, so `DELEGATION_GATE_MODE=block` there was ignored and the gate kept prompting. It's now read on the first gated call and frozen after that. Tests for the load order.
 - **1.3.0** (2026-11-08): `list` / `steer` / `stop` control actions pass through ungated; manifest uses `provides_hooks` (fixes `hermes plugins validate` on current Hermes) and declares `requires_hermes: ">=0.18.2"`; unit tests.
 - **1.2.0** (2026-07-12): block mode (`DELEGATION_GATE_MODE=block`).
 - **1.1.0** (2026-07-11): first public release.
