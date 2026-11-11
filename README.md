@@ -147,7 +147,7 @@ If you need a true one-run-only setting on Windows, use the `.env` route instead
 Add-Content <hermes home>\profiles\batch-profile\.env 'DELEGATION_GATE_MODE=block'
 ```
 
-The mode is read **once per process, on the first delegation attempt**, and then fixed (mirroring how Hermes freezes yolo mode): it's a policy set by whoever launched the process, not something a session can flip. It isn't read at plugin load because Hermes imports plugins before it loads the profile's `.env`, so a value set there would be missed. Changing it takes a gateway restart (and, on a Docker/Desktop backend, a dashboard restart too). Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
+The mode is read **on the first delegation attempt for each profile**, and then fixed for the life of the process (mirroring how Hermes freezes yolo mode): it's a policy set by whoever launched the process, not something a session can flip. The plugin checks both the process environment and the profile's own `.env` file, and `block` in either one wins. It reads the file itself because on Hermes v0.23 a gateway can serve a profile (Desktop sessions, `gateway.multiplex_profiles`) without ever loading that profile's `.env` into the environment. One gateway serving several profiles keeps a separate mode for each. Changing it takes a gateway restart (and, on a Docker/Desktop backend, a dashboard restart too). The chosen mode and where it came from are logged once per profile: `[delegation-gate] mode=block (from /path/to/.env; ...)`. Unset or `approve` = prompt; any unrecognized value logs a warning and falls back to `block`, so a typo on an unattended profile fails safe rather than open.
 
 Suggested fleet pattern: approve mode (default) on interactive profiles, `block` in the `.env` of cron/unattended/yolo profiles.
 
@@ -186,7 +186,7 @@ hermes plugins validate .
 
 ## Changelog
 
-- **1.3.1** (2026-11-11): fix block mode set in the profile's `.env`. The mode was read at import, but Hermes (v0.23) imports plugins before loading `.env`, so `DELEGATION_GATE_MODE=block` there was ignored and the gate kept prompting. It's now read on the first gated call and frozen after that. Tests for the load order.
+- **1.3.1** (2026-11-11): fix block mode set in the profile's `.env`, which was ignored on Hermes v0.23 so the gate kept prompting. Two causes: the mode was read at import, before Hermes loads `.env`; and a gateway serving the profile (Desktop sessions, multiplexed profiles) never loads that profile's `.env` into the environment at all. The mode is now read on the first gated call, from the environment *and* the profile's `.env` file (`block` in either wins), and kept per profile. Tests for the load order, the `.env` file, and multi-profile gateways.
 - **1.3.0** (2026-11-08): `list` / `steer` / `stop` control actions pass through ungated; manifest uses `provides_hooks` (fixes `hermes plugins validate` on current Hermes) and declares `requires_hermes: ">=0.18.2"`; unit tests.
 - **1.2.0** (2026-07-12): block mode (`DELEGATION_GATE_MODE=block`).
 - **1.1.0** (2026-07-11): first public release.

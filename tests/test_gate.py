@@ -8,6 +8,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def profile_home(tmp_path, monkeypatch):
+    """Every test gets its own empty profile home, never the real one."""
+    home = tmp_path / "profile"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    return home
+
+
 def load(monkeypatch, mode=None):
     """Import a fresh copy, like the real plugin load. The mode is read on the first gated call."""
     if mode is None:
@@ -110,6 +119,40 @@ def test_other_tools_and_control_actions_do_not_fix_the_mode(monkeypatch):
     g._pre_tool_call("delegate_task", {"action": "list"})
     monkeypatch.setenv("DELEGATION_GATE_MODE", "block")
     assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+
+
+def test_block_in_profile_env_file_without_environment(monkeypatch, profile_home):
+    # The Calypso case on a v0.23 gateway: the setting is in the profile's .env
+    # but never reached the process environment.
+    (profile_home / ".env").write_text("OTHER=1\nDELEGATION_GATE_MODE=block\n")
+    g = load(monkeypatch)
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+    assert g._pre_tool_call("delegate_task", {"action": "stop", "subagent_id": "s"}) is None
+
+
+def test_block_anywhere_wins(monkeypatch, profile_home):
+    (profile_home / ".env").write_text("DELEGATION_GATE_MODE=block\n")
+    g = load(monkeypatch, "approve")
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+
+
+def test_typo_in_env_file_fails_safe(monkeypatch, profile_home):
+    (profile_home / ".env").write_text("DELEGATION_GATE_MODE=blokc\n")
+    assert load(monkeypatch)._mode() == "block"
+
+
+def test_each_profile_gets_its_own_mode(monkeypatch, tmp_path):
+    # One gateway process can serve several profiles; one profile's block
+    # must not leak into another, and vice versa.
+    blocked, open_ = tmp_path / "blocked", tmp_path / "open"
+    for home in (blocked, open_):
+        home.mkdir()
+    (blocked / ".env").write_text("DELEGATION_GATE_MODE=block\n")
+    g = load(monkeypatch)
+    monkeypatch.setenv("HERMES_HOME", str(blocked))
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "block"
+    monkeypatch.setenv("HERMES_HOME", str(open_))
+    assert g._pre_tool_call("delegate_task", {"goal": "x"})["action"] == "approve"
 
 
 def test_register_declares_only_pre_tool_call(gate):

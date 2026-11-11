@@ -16,6 +16,7 @@ Hermes runtimes that ignore the "approve" action. Unset or "approve" = prompt.
 from __future__ import annotations
 import logging
 import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +37,95 @@ CONTROL_ACTIONS = frozenset({"list", "steer", "stop"})
 # imports plugins *before* it loads the profile's .env (seen on v0.23.0), so a
 # value read at import would never see DELEGATION_GATE_MODE set in .env. By the
 # time the agent can call delegate_task, .env has been loaded.
+#
+# The process environment alone isn't reliable either: on a v0.23 gateway the
+# hook can run where the profile's .env never reached os.environ. So the
+# profile's own .env file is read directly as well, and "block" from either
+# place wins (fail safe).
+#
+# One gateway process can serve several profiles (gateway.multiplex_profiles),
+# so the mode is remembered per profile home, never once for the whole process.
+_SETTING = "DELEGATION_GATE_MODE"
 _VALID_MODES = ("approve", "block")
-_MODE: str | None = None
+_MODES: dict[str, str] = {}
 
 
-def _resolve_mode() -> str:
-    raw = os.getenv("DELEGATION_GATE_MODE", "").strip().lower() or "approve"
-    if raw in _VALID_MODES:
-        return raw
-    # Unrecognized value: fall back to "block", not "approve" — a
-    # misconfigured unattended profile must not run with an open gate.
-    logger.warning(
-        "[delegation-gate] unrecognized DELEGATION_GATE_MODE=%r; "
-        "falling back to 'block' (valid values: %s)",
-        raw, ", ".join(_VALID_MODES),
-    )
-    return "block"
+def _profile_home() -> str:
+    try:
+        from hermes_constants import get_hermes_home  # honors the per-profile home override
+        return str(get_hermes_home())
+    except Exception:
+        return os.environ.get("HERMES_HOME", "")
+
+
+def _profile_env_file() -> Path | None:
+    home = _profile_home()
+    return Path(home) / ".env" if home else None
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    try:
+        from agent.secret_scope import load_env_file  # Hermes' own .env tokenizer
+        return load_env_file(path)
+    except ImportError:
+        pass
+    values: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip().strip("'\"")
+    except OSError:
+        pass
+    return values
+
+
+def _settings() -> list[tuple[str, str]]:
+    """Every place the setting is defined, as (source, raw value)."""
+    found = []
+    path = _profile_env_file()
+    if path is not None and path.is_file():
+        value = _read_env_file(path).get(_SETTING)
+        if value is not None:
+            found.append((str(path), value))
+    if os.environ.get(_SETTING) is not None:
+        found.append(("environment", os.environ[_SETTING]))
+    return found
+
+
+def _resolve_mode() -> tuple[str, str]:
+    """(mode, where it came from). Unset everywhere = approve; block or a typo anywhere = block."""
+    found = _settings()
+    if not found:
+        return "approve", "default"
+    for source, raw in found:
+        value = raw.strip().lower() or "approve"
+        if value == "block":
+            return "block", source
+        if value not in _VALID_MODES:
+            # Unrecognized value: fall back to "block", not "approve" — a
+            # misconfigured unattended profile must not run with an open gate.
+            logger.warning(
+                "[delegation-gate] unrecognized %s=%r in %s; falling back to 'block' (valid values: %s)",
+                _SETTING, raw, source, ", ".join(_VALID_MODES),
+            )
+            return "block", source
+    return "approve", found[0][0]
 
 
 def _mode() -> str:
-    """The process's gate mode: read on first use, then fixed for its lifetime."""
-    global _MODE
-    if _MODE is None:
-        _MODE = _resolve_mode()
-        logger.info("[delegation-gate] mode=%s", _MODE)
-    return _MODE
+    """The profile's gate mode: read on first use, then fixed for the life of the process."""
+    home = _profile_home()
+    mode = _MODES.get(home)
+    if mode is None:
+        mode, source = _resolve_mode()
+        _MODES[home] = mode
+        logger.info("[delegation-gate] mode=%s (from %s; profile %s; pid %s)",
+                    mode, source, home or "?", os.getpid())
+    return mode
 
 BLOCK_MESSAGE = (
     "Delegation is disabled by policy on this profile "
