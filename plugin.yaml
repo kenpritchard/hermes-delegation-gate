@@ -7,3 +7,5 @@ homepage: https://github.com/kenpritchard/hermes-delegation-gate
 requires_hermes: ">=0.18.2"
 provides_hooks:
   - pre_tool_call
+provides_hooks:
+  - pre_tool_call
